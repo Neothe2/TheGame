@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="en">
+ <head>
+   <meta charset="UTF-8" />
+   <title>The Game</title>
+   <style>
+     * { margin: 0; padding: 0; box-sizing: border-box; }
+     body { background: #4a86c8; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; color: #fff; font-family: "Segoe UI", sans-serif; user-select: none; }
+     #game-container { position: relative; width: 800px; height: 450px; background: #000; box-shadow: 0 10px 40px rgba(0,0,0,0.4); overflow: hidden; border-radius: 4px; }
+     canvas { position: absolute; top: 0; left: 0; display: block; width: 100%; height: 100%; cursor: none; z-index: 0; }
+     #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+     #ui-panel { position: absolute; top: 20px; right: 20px; width: 220px; height: auto; background: rgba(20, 12, 6, 0.55); border: 1px solid rgba(60, 40, 20, 0.6); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; justify-content: center; gap: 11px; }
+     .ui-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: bold; }
+     .label { color: #fff; margin-right: 10px; min-width: 70px; }
+     .hp-container { flex-grow: 1; height: 12px; background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.1); }
+     #hp-fill { height: 100%; width: 100%; background-color: #ffcc33; transition: width 0.1s linear, background-color 0.2s; }
+     .weapon-info { display: flex; flex-direction: column; align-items: flex-end; width: 100%; }
+     #weapon-name { font-size: 10px; color: #d8c8a0; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+     .cd-container { width: 100px; height: 6px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1); }
+     #cd-fill { height: 100%; width: 100%; background-color: #ffb347; transition: width 0.1s linear; }
+     #shrine-cd-fill { height: 100%; width: 100%; background-color: #cc2222; transition: width 0.1s linear; }
+     .pips-container { display: flex; gap: 4px; }
+     .pip { width: 15px; height: 10px; background-color: #333; border-radius: 1px; transition: background-color 0.1s; }
+     .pip.jump-active { background-color: #ffcc33; }
+     .pip.dash-active { background-color: #ffffff; }
+     #cinematic-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 20; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; opacity: 0; transition: opacity 0.5s ease; }
+     #cinematic-layer.active { opacity: 1; }
+     .cine-bar { width: 100%; height: 0; background-color: #000; transition: height 0.5s ease; }
+     #cinematic-layer.active .cine-bar { height: 60px; }
+     #dialogue-box { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 600px; background: rgba(0,0,0,0.8); border: 1px solid #fff; padding: 20px; text-align: center; font-family: "Courier New", monospace; display: none; }
+     #cinematic-layer.active #dialogue-box { display: block; }
+     #fade-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #000; z-index: 30; opacity: 0; pointer-events: none; transition: opacity 1s ease; }
+     #fade-overlay.black { opacity: 1; }
+   </style>
+ </head>
+ <body>
+   <div id="game-container">
+     <canvas id="game" width="800" height="450"></canvas>
+     <div id="ui-layer">
+       <div id="ui-panel">
+         <div class="ui-row"><span class="label">HP</span><div class="hp-container"><div id="hp-fill"></div></div></div>
+         <div class="ui-row"><span class="label">Wall Jumps</span><div id="jumps-container" class="pips-container"></div></div>
+         <div class="ui-row"><span class="label">Dashes</span><div id="dashes-container" class="pips-container"></div></div>
+         <div class="ui-row"><span class="label">Weapon</span><div class="weapon-info"><span id="weapon-name">Pellets</span><div class="cd-container"><div id="cd-fill"></div></div></div></div>
+         <div class="ui-row"><span class="label">Shrine (G)</span><div class="weapon-info"><div class="cd-container"><div id="shrine-cd-fill"></div></div></div></div>
+       </div>
+     </div>
+     <div id="cinematic-layer"><div class="cine-bar"></div><div id="dialogue-box"></div><div class="cine-bar"></div></div>
+     <div id="fade-overlay"></div>
+   </div>
+
+
+   <script>
+     class Config {
+       static PHYSICS = { GRAVITY: 0.6, RUN_SPEED: 4.0, ACCEL: 1.5, GROUND_FRICTION: 0.8, AIR_RESISTANCE: 0.97, WALL_SLIDE_SPEED: 2, TERMINAL_VELOCITY: 18, DASH_SPEED: 18.0, DASH_DURATION: 10, DASH_REGEN_TIME: 30, JUMP_POWER: -13, JUMP_CUTOFF: 0.5, ENTITY_REPULSION: 1.5 };
+       static WORLD = { WIDTH: 2000, HEIGHT: 1200 };
+       static COLORS = {
+         SKY_TOP: "#5a9bd4", SKY_BOTTOM: "#a7cdf0", CLOUD: "rgba(255,255,255,0.7)",
+         PLAYER: "#ffd34d", PLAYER_EYES: "#000000",
+         ENEMY: "#c0392b", ENEMY_DEAD: "#6b3a2a", ENEMY_EYES: "#2a0808",
+         DIRT: "#7a5230", DIRT_TOP: "#8fa83f", DIRT_DARK: "#5c3d22", DIRT_EDGE: "#3d2814",
+         DASH_ACTIVE: "#ffffff"
+       };
+     }
+
+
+     class Utils {
+       static rand(min, max) { return Math.random() * (max - min) + min; }
+       static lerp(start, end, amt) { return (1 - amt) * start + amt * end; }
+       static checkAABB(rect1, rect2) { return ( rect1.x < rect2.x + rect2.width && rect1.x + rect1.width > rect2.x && rect1.y < rect2.y + rect2.height && rect1.y + rect1.height > rect2.y ); }
+       static getAngle(x1, y1, x2, y2) { return Math.atan2(y2 - y1, x2 - x1); }
+       static dist(x1, y1, x2, y2) { return Math.sqrt(Math.pow(x2-x1, 2) + Math.pow(y2-y1, 2)); }
+       static clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+       static lineIntersectsRect(p1, p2, rect) {
+           if (p1.x > rect.x && p1.x < rect.x + rect.width && p1.y > rect.y && p1.y < rect.y + rect.height) return true;
+           if (p2.x > rect.x && p2.x < rect.x + rect.width && p2.y > rect.y && p2.y < rect.y + rect.height) return true;
+           return false;
+       }
+     }
+
+
+     class InputHandler {
+       constructor(canvas) {
+         this.keys = {}; this.keysPressed = {};
+         this.mouse = { x: 0, y: 0, down: false, pressed: false, rightPressed: false };
+         this.canvas = canvas;
+         window.addEventListener("keydown", (e) => this._onKeyDown(e));
+         window.addEventListener("keyup", (e) => this._onKeyUp(e));
+         canvas.addEventListener("mousemove", (e) => this._onMouseMove(e));
+         canvas.addEventListener("mousedown", (e) => this._onMouseDown(e));
+         canvas.addEventListener("mouseup", (e) => this._onMouseUp(e));
+         canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+       }
+       _onKeyDown(e) { const k = e.key.toLowerCase(); if(!this.keys[k]) this.keysPressed[k] = true; this.keys[k] = true; }
+       _onKeyUp(e) { const k = e.key.toLowerCase(); this.keys[k] = false; this.keysPressed[k] = false; }
+       _onMouseMove(e) { const r = this.canvas.getBoundingClientRect(); this.mouse.x = e.clientX - r.left; this.mouse.y = e.clientY - r.top; }
+       _onMouseDown(e) { if(e.button===0) { this.mouse.down=true; this.mouse.pressed=true; } if(e.button===2) this.mouse.rightPressed=true; }
+       _onMouseUp(e) { if(e.button===0) this.mouse.down=false; }
+       isDown(key) { return !!this.keys[key]; }
+       isPressed(key) { return !!this.keysPressed[key]; }
+       clearFrame() { this.keysPressed = {}; this.mouse.pressed = false; this.mouse.rightPressed = false; }
+     }
+
+
+     class PhysicsSystem {
+       constructor(level) { this.level = level; }
+       applyGravity(entity) { entity.dy += Config.PHYSICS.GRAVITY; }
+       applyFriction(entity) { const friction = entity.onGround ? Config.PHYSICS.GROUND_FRICTION : Config.PHYSICS.AIR_RESISTANCE; entity.dx *= friction; if (Math.abs(entity.dx) < 0.1) entity.dx = 0; }
+       resolveCollisions(entity) {
+         if (entity.onWall && entity.dy > 0 && !entity.onGround) entity.dy = Config.PHYSICS.WALL_SLIDE_SPEED;
+         let nextX = entity.x + entity.dx; let nextY = entity.y + entity.dy;
+         entity.onGround = false; entity.onWall = false;
+         for (const plat of this.level.platforms) {
+           if (Utils.checkAABB({ x: nextX, y: entity.y, width: entity.width, height: entity.height }, plat)) {
+             if (entity.dx > 0) { nextX = plat.x - entity.width; entity.onWall = "right"; }
+             else if (entity.dx < 0) { nextX = plat.x + plat.width; entity.onWall = "left"; }
+             entity.dx = 0;
+           }
+         }
+         for (const plat of this.level.platforms) {
+           if (Utils.checkAABB({ x: nextX, y: nextY, width: entity.width, height: entity.height }, plat)) {
+             if (entity.dy > 0) { nextY = plat.y - entity.height; entity.onGround = true; }
+             else if (entity.dy < 0) { nextY = plat.y + plat.height; }
+             entity.dy = 0;
+           }
+         }
+         entity.x = nextX; entity.y = nextY;
+         if (entity.x < 0) entity.x = 0;
+         if (entity.x > Config.WORLD.WIDTH - entity.width) entity.x = Config.WORLD.WIDTH - entity.width;
+       }
+       resolveEntitySeparation(entities) {
+           for (let i = 0; i < entities.length; i++) {
+               for (let j = i + 1; j < entities.length; j++) {
+                   const e1 = entities[i]; const e2 = entities[j];
+                   if (e1.isDead || e2.isDead) continue;
+                   if (Utils.checkAABB(e1, e2)) {
+                       const cx1 = e1.x + e1.width / 2; const cy1 = e1.y + e1.height / 2;
+                       const cx2 = e2.x + e2.width / 2; const cy2 = e2.y + e2.height / 2;
+                       let dx = cx1 - cx2; let dy = cy1 - cy2; let dist = Math.sqrt(dx * dx + dy * dy);
+                       if (dist === 0) { dx = 1; dy = 0; dist = 1; }
+                       const nx = dx / dist; const ny = dy / dist; const force = Config.PHYSICS.ENTITY_REPULSION;
+                       e1.dx += nx * force; e1.dy += ny * force; e2.dx -= nx * force; e2.dy -= ny * force;
+                   }
+               }
+           }
+       }
+     }
+
+
+     class RenderSystem {
+       constructor(ctx, camera) { this.ctx = ctx; this.camera = camera; }
+       clear(width, height) {
+         const g = this.ctx.createLinearGradient(0, 0, 0, height);
+         g.addColorStop(0, Config.COLORS.SKY_TOP); g.addColorStop(1, Config.COLORS.SKY_BOTTOM);
+         this.ctx.fillStyle = g; this.ctx.fillRect(0, 0, width, height);
+       }
+       begin() { this.ctx.save(); this.ctx.translate(-this.camera.x, -this.camera.y); }
+       end() { this.ctx.restore(); }
+       drawClouds(camera) {
+         this.ctx.fillStyle = Config.COLORS.CLOUD;
+         const off = (camera.x * 0.2) % 600;
+         for (let i = -1; i < 6; i++) {
+           const bx = i * 600 - off; const by = 40 + (i % 3) * 30;
+           this.ctx.beginPath(); this.ctx.arc(bx, by, 26, 0, Math.PI*2);
+           this.ctx.arc(bx+26, by+4, 20, 0, Math.PI*2); this.ctx.arc(bx-24, by+6, 18, 0, Math.PI*2);
+           this.ctx.fill();
+         }
+       }
+       drawLevel(level) {
+         this.ctx.shadowBlur = 0;
+         for (const p of level.platforms) {
+           this.ctx.fillStyle = Config.COLORS.DIRT;
+           this.ctx.fillRect(p.x, p.y, p.width, p.height);
+           // grassy top only when it's roughly horizontal and not a wall
+           if (p.height <= 30) {
+             this.ctx.fillStyle = Config.COLORS.DIRT_TOP;
+             this.ctx.fillRect(p.x, p.y, p.width, Math.min(6, p.height));
+           }
+           this.ctx.strokeStyle = Config.COLORS.DIRT_EDGE;
+           this.ctx.lineWidth = 2;
+           this._strokeVisibleEdges(level, p);
+         }
+       }
+       _strokeVisibleEdges(level, p) {
+         const eps = 1;
+         const top    = { a:{x:p.x, y:p.y}, b:{x:p.x+p.width, y:p.y} };
+         const bottom = { a:{x:p.x, y:p.y+p.height}, b:{x:p.x+p.width, y:p.y+p.height} };
+         const left   = { a:{x:p.x, y:p.y}, b:{x:p.x, y:p.y+p.height} };
+         const right  = { a:{x:p.x+p.width, y:p.y}, b:{x:p.x+p.width, y:p.y+p.height} };
+         const segs = [top, bottom, left, right];
+         for (const s of segs) {
+           const keep = this._trimSegmentAgainst(s, level, p, eps);
+           for (const k of keep) {
+             this.ctx.beginPath(); this.ctx.moveTo(k.a.x, k.a.y); this.ctx.lineTo(k.b.x, k.b.y); this.ctx.stroke();
+           }
+         }
+       }
+       _trimSegmentAgainst(seg, level, self, eps) {
+         let pieces = [seg];
+         for (const o of level.platforms) {
+           if (o === self) continue;
+           const next = [];
+           for (const piece of pieces) {
+             const result = this._clipToRect(piece, o, eps);
+             if (result.length) next.push(...result);
+           }
+           pieces = next;
+           if (!pieces.length) break;
+         }
+         return pieces;
+       }
+       _clipToRect(seg, r, eps) {
+         const r2 = { x: r.x - eps, y: r.y - eps, width: r.width + eps*2, height: r.height + eps*2 };
+         // whole segment absorbed by neighbour => drop it (no border there)
+         if (this._segInside(seg, r2)) return [];
+         // otherwise keep as-is. Collinear overlap is rare for our grid; full split is overkill.
+         return [seg];
+       }
+       _segInside(s, r) {
+         return s.a.x >= r.x - 0.01 && s.a.x <= r.x + r.width + 0.01 &&
+                s.a.y >= r.y - 0.01 && s.a.y <= r.y + r.height + 0.01 &&
+                s.b.x >= r.x - 0.01 && s.b.x <= r.x + r.width + 0.01 &&
+                s.b.y >= r.y - 0.01 && s.b.y <= r.y + r.height + 0.01;
+       }
+       drawEntity(entity, targetPoint) {
+         if(entity.isDead && !entity.markedForDeletion) { this.ctx.globalAlpha = 0.5; }
+         this.ctx.save();
+         const cx = entity.x + entity.width / 2; const cy = entity.y + entity.height;
+         this.ctx.translate(cx, cy); this.ctx.scale(entity.scaleX, entity.scaleY); this.ctx.translate(-cx, -cy);
+         this.ctx.fillStyle = entity.color;
+         if (entity.hitFlashTimer > 0) this.ctx.fillStyle = "#fff";
+         if (entity.isDashing) this.ctx.fillStyle = "#fff";
+         this.ctx.shadowBlur = 0;
+         this.ctx.fillRect(entity.x, entity.y, entity.width, entity.height);
+         if (entity.hasEyes) {
+           const targetX = targetPoint ? targetPoint.x : entity.x;
+           const targetY = targetPoint ? targetPoint.y : entity.y;
+           this._drawEyes(entity, targetX, targetY, entity.eyeColor || "#000");
+         }
+         if (entity.iFrames > 0) {
+           this.ctx.globalAlpha = 0.4 + 0.4 * Math.sin(entity.iFrames * 1.2);
+         }
+         if (entity.showHealthBar) this._drawHealthBar(entity);
+         if (entity.currentWeapon && !entity.isDead) {
+           entity.currentWeapon.draw(this.ctx, entity, targetPoint);
+         }
+         if (entity.parryActive && entity.parryTimer > 0) this._drawParryShield(entity);
+         this.ctx.restore(); this.ctx.globalAlpha = 1.0;
+       }
+       _drawEyes(entity, targetX, targetY, color) {
+         if(entity.isDead) return;
+         const es = 4; const esp = 6; const cx = entity.x + entity.width / 2; const cy = entity.y + entity.height / 3;
+         const lx = targetX - cx; const ly = targetY - cy; const mm = 3;
+         const d = Math.sqrt(lx * lx + ly * ly) || 1;
+         const mx = (lx / d) * mm; const my = (ly / d) * mm;
+         this.ctx.fillStyle = color;
+         this.ctx.fillRect(cx - esp + mx - es / 2, cy + my - es / 2, es, es);
+         this.ctx.fillRect(cx + esp + mx - es / 2, cy + my - es / 2, es, es);
+       }
+       _drawHealthBar(entity) {
+         if (entity.isDead) return;
+         const hpPct = Math.max(0, entity.health / entity.maxHealth);
+         this.ctx.fillStyle = "#333";
+         this.ctx.fillRect(entity.x, entity.y - 8, entity.width, 3);
+         this.ctx.fillStyle = "#f00";
+         this.ctx.fillRect(entity.x, entity.y - 8, entity.width * hpPct, 3);
+       }
+       _drawParryShield(entity) {
+         const cx = entity.x + entity.width/2; const cy = entity.y + entity.height/2;
+         const r = entity.width * 1.4;
+         this.ctx.globalAlpha = 0.5 * (entity.parryTimer / entity.parryDuration);
+         this.ctx.strokeStyle = "#ffffff"; this.ctx.lineWidth = 2;
+         this.ctx.beginPath(); this.ctx.arc(cx, cy, r, 0, Math.PI*2); this.ctx.stroke();
+         this.ctx.globalAlpha = 1;
+       }
+       drawBullet(bullet) {
+         this.ctx.fillStyle = bullet.isPlayer ? "#fff" : "#ffd9b0";
+         this.ctx.beginPath(); this.ctx.arc(bullet.x, bullet.y, bullet.radius, 0, Math.PI * 2); this.ctx.fill();
+         if (!bullet.isPlayer) {
+           this.ctx.strokeStyle = "rgba(255, 120, 40, 0.8)"; this.ctx.lineWidth = 2;
+           this.ctx.beginPath(); this.ctx.arc(bullet.x, bullet.y, bullet.radius + 2, 0, Math.PI*2); this.ctx.stroke();
+         }
+       }
+       drawCursor(mouse) {
+         this.ctx.strokeStyle = "#fff"; this.ctx.lineWidth = 1;
+         const mx = mouse.x; const my = mouse.y;
+         this.ctx.strokeRect(mx - 6, my - 6, 12, 12);
+         this.ctx.beginPath(); this.ctx.moveTo(mx, my - 2); this.ctx.lineTo(mx, my + 2);
+         this.ctx.moveTo(mx - 2, my); this.ctx.lineTo(mx + 2, my); this.ctx.stroke();
+       }
+     }
+
+
+     class Particle {
+       constructor(x, y, type, color, size = null) {
+         this.x = x; this.y = y; this.type = type; this.color = color; this.life = 1.0; this.size = size;
+         this._initPhysics();
+       }
+       _initPhysics() {
+         const angle = Utils.rand(0, Math.PI * 2);
+         if (this.type === "dust") { this.dx = Math.cos(angle) * 0.5; this.dy = -Utils.rand(0.5, 2); this.decay = 0.04; this.size = this.size || Utils.rand(2, 4); }
+         else if (this.type === "spark") { const speed = 3; this.dx = Math.cos(angle) * speed; this.dy = Math.sin(angle) * speed; this.decay = 0.06; this.size = this.size || Utils.rand(2, 5); }
+         else if (this.type === "trail") { this.dx = 0; this.dy = 0; this.decay = 0.1; this.size = this.size || Utils.rand(2, 4); }
+         else if (this.type === "slash") { this.dx = 0; this.dy = 0; this.decay = 0.15; this.angle = Utils.rand(0, Math.PI * 2); this.size = this.size || Utils.rand(30, 60); }
+       }
+       update() {
+         this.x += this.dx; this.y += this.dy; this.life -= this.decay;
+         if (this.type === "spark") { this.dy += 0.2; this.dx *= 0.95; }
+       }
+       draw(ctx) {
+         ctx.globalAlpha = Math.max(0, this.life); ctx.fillStyle = this.color;
+         if (this.type === "slash") {
+           ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(this.angle);
+           ctx.beginPath();
+           ctx.moveTo(-this.size / 2, 0); ctx.lineTo(0, -2); ctx.lineTo(this.size / 2, 0); ctx.lineTo(0, 2);
+           ctx.closePath(); ctx.fill();
+           ctx.restore();
+         } else {
+           ctx.fillRect(this.x - this.size / 2, this.y - this.size / 2, this.size, this.size);
+         }
+         ctx.globalAlpha = 1.0;
+       }
+     }
+
+
+     class ParticleSystem {
+       constructor() { this.particles = []; }
+       update() { for (let i = this.particles.length - 1; i >= 0; i--) { this.particles[i].update(); if (this.particles[i].life <= 0) this.particles.splice(i, 1); } }
+       draw(ctx) { this.particles.forEach((p) => p.draw(ctx)); }
+       emitDust(x, y) { for (let i = 0; i < 4; i++) this.particles.push(new Particle(x, y, "dust", "#caa472")); }
+       emitExplosion(x, y, color) { for (let i = 0; i < 12; i++) this.particles.push(new Particle(x, y, "spark", color)); }
+       emitTrail(x, y, color, size) { if (Math.random() > 0.3) this.particles.push(new Particle(x, y, "trail", color, size)); }
+       emitGhost(x, y, width, height, color) { const p = new Particle(x + width / 2, y + height / 2, "trail", color, width); p.decay = 0.15; this.particles.push(p); }
+       emitSlash(x, y, color, size) { this.particles.push(new Particle(x, y, "slash", color, size)); }
+     }
+
+
+     class UIManager {
+       constructor() {
+         this.uiLayer = document.getElementById("ui-layer"); this.hpFill = document.getElementById("hp-fill");
+         this.jumpsContainer = document.getElementById("jumps-container"); this.dashesContainer = document.getElementById("dashes-container");
+         this.weaponNameEl = document.getElementById("weapon-name"); this.cdFill = document.getElementById("cd-fill");
+         this.shrineCdFill = document.getElementById("shrine-cd-fill");
+         this.jumpPips = []; this.dashPips = [];
+       }
+       init(maxJumps, maxDashes) {
+         this._createPips(this.jumpsContainer, this.jumpPips, maxJumps);
+         this._createPips(this.dashesContainer, this.dashPips, maxDashes);
+       }
+       _createPips(container, array, count) {
+         container.innerHTML = ""; array.length = 0;
+         for (let i = 0; i < count; i++) { const pip = document.createElement("div"); pip.className = "pip"; container.appendChild(pip); array.push(pip); }
+       }
+       update(player) {
+         const hpPct = Math.max(0, player.health / player.maxHealth) * 100;
+         this.hpFill.style.width = `${hpPct}%`; this.hpFill.style.backgroundColor = hpPct > 30 ? Config.COLORS.PLAYER : "#ff0000";
+         this.jumpPips.forEach((pip, i) => { if (i < player.wallJumps) pip.classList.add("jump-active"); else pip.classList.remove("jump-active"); });
+         this.dashPips.forEach((pip, i) => { if (i < player.dashes) pip.classList.add("dash-active"); else pip.classList.remove("dash-active"); });
+         if (player.currentWeapon) {
+             this.weaponNameEl.textContent = player.currentWeapon.name;
+             if (player.currentWeapon.isUnlimited) { this.cdFill.style.width = '100%'; this.cdFill.style.backgroundColor = "#ffb347"; }
+             else {
+                 const pct = (player.currentWeapon.cooldownTimer / player.currentWeapon.cooldownTime);
+                 const displayPct = Math.max(0, 1 - pct) * 100;
+                 this.cdFill.style.width = `${displayPct}%`; this.cdFill.style.backgroundColor = displayPct === 100 ? "#ffb347" : "#888";
+             }
+         }
+         if (player.shrine) {
+             if (player.shrine.isActive) {
+                 const pct = player.shrine.timer / player.shrine.duration;
+                 this.shrineCdFill.style.width = `${pct * 100}%`;
+                 this.shrineCdFill.style.backgroundColor = "#cc2222";
+             } else {
+                 const pct = player.shrine.cooldown / player.shrine.maxCooldown;
+                 const displayPct = Math.max(0, 1 - pct) * 100;
+                 this.shrineCdFill.style.width = `${displayPct}%`;
+                 this.shrineCdFill.style.backgroundColor = displayPct === 100 ? "#cc2222" : "#888";
+             }
+         }
+       }
+     }
+
+
+     class Camera {
+       constructor() { this.x = 0; this.y = 0; this.shakePower = 0; this.zoom = 1; this.targetZoom = 1; }
+       shake(amount) { this.shakePower = Math.max(this.shakePower, amount); }
+       setZoom(z) { this.targetZoom = z; }
+       update(target, canvasWidth, canvasHeight) {
+         let targetX = target.x + target.width / 2 - canvasWidth / 2;
+         let targetY = target.y + target.height / 2 - canvasHeight / 2;
+         targetX = Math.max(0, Math.min(targetX, Config.WORLD.WIDTH - canvasWidth));
+         targetY = Math.max(0, Math.min(targetY, Config.WORLD.HEIGHT - canvasHeight));
+         this.x += (targetX - this.x) * 0.1;
+         this.y += (targetY - this.y) * 0.1;
+         this.zoom += (this.targetZoom - this.zoom) * 0.08;
+         if (this.shakePower > 0) {
+           this.x += Utils.rand(-this.shakePower, this.shakePower); this.y += Utils.rand(-this.shakePower, this.shakePower);
+           this.shakePower *= 0.9; if (this.shakePower < 0.5) this.shakePower = 0;
+         }
+       }
+     }
+
+
+     class Weapon {
+       constructor(name, cooldownTime, isAuto) {
+           this.name = name; this.cooldownTime = cooldownTime; this.cooldownTimer = 0;
+           this.isUnlimited = cooldownTime === 0; this.isAuto = isAuto;
+       }
+       update(context, owner) { if (this.cooldownTimer > 0) this.cooldownTimer--; }
+       canAttack() { return this.cooldownTimer <= 0; }
+       attack(context, owner) {}
+       draw(ctx, owner, targetPoint) {}
+     }
+
+
+     class PelletGun extends Weapon {
+       constructor() { super("Pellets", 0, true); this.internalCooldown = 0; }
+       update(context, owner) { super.update(context, owner); if (this.internalCooldown > 0) this.internalCooldown--; }
+       canAttack() { return this.internalCooldown <= 0; }
+       attack(context, owner) {
+           this.internalCooldown = 8;
+           const cx = owner.x + owner.width / 2; const cy = owner.y + owner.height / 2;
+           const worldMouseX = context.input.mouse.x + context.camera.x;
+           const worldMouseY = context.input.mouse.y + context.camera.y;
+           const angle = Utils.getAngle(cx, cy, worldMouseX, worldMouseY);
+           this.fire(context, owner, angle);
+       }
+       fire(context, owner, angle) {
+           const speed = 12;
+           const bullet = new Bullet(owner.x + owner.width/2, owner.y + owner.height/2, Math.cos(angle) * speed, Math.sin(angle) * speed, owner instanceof Player);
+           bullet.radius = owner instanceof Player ? 3 : 7;
+           context.bulletManager.add(bullet);
+           if(owner instanceof Player) {
+               context.camera.shake(2);
+               context.particles.emitExplosion(owner.x + owner.width/2 + Math.cos(angle) * 15, owner.y + owner.height/2 + Math.sin(angle) * 15, "#fff");
+           }
+       }
+       draw(ctx, owner, targetPoint) {
+           const cx = owner.x + owner.width / 2;
+           const cy = owner.y + owner.height / 2;
+           const angle = Math.atan2(targetPoint.y - cy, targetPoint.x - cx);
+           ctx.save();
+           ctx.translate(cx, cy);
+           ctx.rotate(angle);
+           if (Math.abs(angle) > Math.PI / 2) ctx.scale(1, -1);
+           const recoil = this.internalCooldown > 0 ? (this.internalCooldown / 8) * 3 : 0;
+           ctx.translate(15 - recoil, 0);
+           ctx.fillStyle = "#222"; ctx.fillRect(-2, 2, 6, 8);
+           ctx.fillStyle = "#444"; ctx.fillRect(-6, -4, 18, 6);
+           ctx.fillStyle = "#666"; ctx.fillRect(4, -2, 6, 2);
+           ctx.restore();
+       }
+     }
+
+
+     class Shotgun extends Weapon {
+       constructor() { super("Shotgun", 40, false); }
+       attack(context, owner) {
+           this.cooldownTimer = this.cooldownTime;
+           const cx = owner.x + owner.width / 2; const cy = owner.y + owner.height / 2;
+           let targetX = owner instanceof Player ? context.input.mouse.x + context.camera.x : context.game.player.x + context.game.player.width/2;
+           let targetY = owner instanceof Player ? context.input.mouse.y + context.camera.y : context.game.player.y + context.game.player.height/2;
+           const baseAngle = Utils.getAngle(cx, cy, targetX, targetY);
+           const pelletCount = 6; const spreadDegrees = 0.5;
+           for(let i = 0; i < pelletCount; i++) {
+               const angle = baseAngle - (spreadDegrees/2) + (Math.random() * spreadDegrees);
+               const speed = Utils.rand(12, 18);
+               const bullet = new Bullet(cx, cy, Math.cos(angle) * speed, Math.sin(angle) * speed, owner instanceof Player);
+               context.bulletManager.add(bullet);
+           }
+           if(owner instanceof Player) {
+               context.camera.shake(8);
+               context.particles.emitExplosion(cx + Math.cos(baseAngle)*20, cy + Math.sin(baseAngle)*20, "#FFAA00");
+               owner.dx -= Math.cos(baseAngle) * 5; owner.dy -= Math.sin(baseAngle) * 5;
+           }
+       }
+       draw(ctx, owner, targetPoint) {
+           const cx = owner.x + owner.width / 2;
+           const cy = owner.y + owner.height / 2;
+           const angle = Math.atan2(targetPoint.y - cy, targetPoint.x - cx);
+           ctx.save();
+           ctx.translate(cx, cy);
+           ctx.rotate(angle);
+           if (Math.abs(angle) > Math.PI / 2) ctx.scale(1, -1);
+           let recoil = 0;
+           if (this.cooldownTimer > 30) recoil = ((this.cooldownTimer - 30) / 10) * 8;
+           ctx.translate(15 - recoil, 0);
+           ctx.fillStyle = "#111"; ctx.fillRect(-8, 0, 8, 6);
+           ctx.fillStyle = "#333"; ctx.fillRect(-4, -4, 14, 8);
+           ctx.fillStyle = "#555"; ctx.fillRect(10, -4, 16, 6);
+           ctx.fillStyle = "#222"; ctx.fillRect(10, 2, 10, 3);
+           ctx.fillStyle = "#FFAA00"; ctx.fillRect(2, -2, 4, 4);
+           ctx.restore();
+       }
+     }
+
+
+     class VoltKatana extends Weapon {
+         constructor() {
+             super("Volt Katana", 12, false);
+             this.comboStep = 0; this.comboTimer = 0;
+             this.isSwinging = false; this.swingTimer = 0; this.swingDuration = 10;
+             this.hitboxRange = 90; this.hitList = []; this.targetAngle = 0; this.swingDir = 1;
+             this.slashEffects = [];
+         }
+         update(context, owner) {
+             super.update(context, owner);
+             if (this.comboTimer > 0) {
+                 this.comboTimer--;
+                 if (this.comboTimer <= 0 && !this.isSwinging) this.comboStep = 0;
+             }
+             for (let i = this.slashEffects.length - 1; i >= 0; i--) {
+                 this.slashEffects[i].life--;
+                 if (this.slashEffects[i].life <= 0) this.slashEffects.splice(i, 1);
+             }
+             if (this.isSwinging) {
+                 this.swingTimer--;
+                 const progress = 1 - (this.swingTimer / this.swingDuration);
+                 if (progress > 0.1 && progress < 0.9) this._checkCollisions(context, owner);
+                 if (this.swingTimer <= 0) this.isSwinging = false;
+             }
+         }
+         _checkCollisions(context, owner) {
+             const cx = owner.x + owner.width / 2; const cy = owner.y + owner.height / 2;
+             const targets = owner instanceof Player ? context.game.enemies : [context.game.player];
+             const lastEffect = this.slashEffects[this.slashEffects.length-1];
+             const isSpin = lastEffect && lastEffect.isSpin;
+             const isFinisher = lastEffect && lastEffect.isFinisher;
+             const damage = isFinisher ? 120 : (isSpin ? 60 : 30);
+             const knockback = isFinisher ? 22 : (isSpin ? 16 : 8);
+
+             targets.forEach(e => {
+                 if (this.hitList.includes(e) || e.isDead) return;
+                 const ex = e.x + e.width/2; const ey = e.y + e.height/2;
+                 const dist = Math.hypot(ex - cx, ey - cy);
+                 if (dist < this.hitboxRange + Math.max(e.width, e.height)/2) {
+                     let hit = false;
+                     if (isSpin || isFinisher) hit = true;
+                     else {
+                         const angleToEnemy = Math.atan2(ey - cy, ex - cx);
+                         let diff = angleToEnemy - this.targetAngle;
+                         diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+                         if (Math.abs(diff) < 1.2) hit = true;
+                     }
+                     if (hit) {
+                         this.hitList.push(e);
+                         e.takeDamage(damage);
+                         const angleToEnemy = Math.atan2(ey - cy, ex - cx);
+                         e.dx = Math.cos(angleToEnemy) * knockback;
+                         e.dy = Math.sin(angleToEnemy) * knockback - (isFinisher ? 8 : (isSpin ? 4 : 2));
+
+                         // i-frames granted to the wielder on every successful connect
+                         owner.iFrames = Math.max(owner.iFrames, isFinisher ? 40 : 14);
+
+                         if (owner instanceof Player) {
+                             context.camera.shake(isFinisher ? 18 : (isSpin ? 12 : 5));
+                             context.game.freezeFrames = isFinisher ? 10 : (isSpin ? 5 : 2);
+                         }
+                         const sparkColor = isFinisher ? "#ffffff" : (isSpin ? "#ffd633" : "#9ad8ff");
+                         for(let i=0; i<(isFinisher?14:6); i++) context.particles.emitExplosion(ex, ey, sparkColor);
+                         if (isFinisher) {
+                             // big finisher slash + burst
+                             context.particles.emitSlash(ex, ey, "#ffffff", Utils.rand(80, 140));
+                         }
+                     }
+                 }
+             });
+         }
+         attack(context, owner) {
+             let lungeSpeed = 6; this.swingDuration = 10;
+             let arcSweep = 2.4; let color = "#9ad8ff";
+
+             // Finisher: triggers when the combo is fresh and an enemy is low on health, or 4th input
+             const wantFinisher = (this.comboStep === 2);
+
+             if (this.comboStep === 0) this.swingDir = 1;
+             else if (this.comboStep === 1) this.swingDir = -1;
+             else if (this.comboStep === 2) {
+                 this.swingDir = 1; lungeSpeed = 14; this.swingDuration = 20;
+                 arcSweep = Math.PI * 2; color = "#ffffff";
+             }
+
+             this.cooldownTimer = this.comboStep === 2 ? 30 : 12; this.comboTimer = 45;
+             this.isSwinging = true; this.swingTimer = this.swingDuration; this.hitList = [];
+
+             const cx = owner.x + owner.width / 2; const cy = owner.y + owner.height / 2;
+             let mx, my;
+             if (owner instanceof Player) { mx = context.input.mouse.x + context.camera.x; my = context.input.mouse.y + context.camera.y; }
+             else { mx = context.game.player.x; my = context.game.player.y; }
+             this.targetAngle = Math.atan2(my - cy, mx - cx);
+
+             owner.dx += Math.cos(this.targetAngle) * lungeSpeed; owner.dy += Math.sin(this.targetAngle) * lungeSpeed;
+             if (owner instanceof Player && this.comboStep === 2) context.camera.shake(6);
+
+             this.slashEffects.push({
+                 angle: this.targetAngle, sweep: arcSweep, dir: this.swingDir, radius: this.hitboxRange,
+                 life: 14, maxLife: 14, color: color, isSpin: this.comboStep === 2, isFinisher: wantFinisher
+             });
+
+             this.comboStep = (this.comboStep + 1) % 3;
+         }
+         draw(ctx, owner, targetPoint) {
+             const cx = owner.x + owner.width / 2; const cy = owner.y + owner.height / 2;
+             this.slashEffects.forEach(effect => {
+                 ctx.save(); ctx.translate(cx, cy); ctx.rotate(effect.angle);
+                 if (effect.dir < 0) ctx.scale(1, -1);
+                 const progress = 1 - (effect.life / effect.maxLife);
+                 ctx.globalAlpha = effect.life / effect.maxLife;
+                 if (effect.isSpin || effect.isFinisher) {
+                     ctx.beginPath(); ctx.arc(0, 0, effect.radius, 0, Math.PI * 2);
+                     ctx.lineWidth = (effect.isFinisher ? 22 : 15) * (1 - progress); ctx.strokeStyle = effect.color; ctx.stroke();
+                     ctx.beginPath(); ctx.arc(0, 0, effect.radius * 0.7, 0, Math.PI * 2);
+                     ctx.lineWidth = 6 * (1 - progress); ctx.strokeStyle = "#ffffff"; ctx.stroke();
+                 } else {
+                     ctx.beginPath(); const startAng = -effect.sweep / 2; const endAng = effect.sweep / 2;
+                     ctx.arc(0, 0, effect.radius, startAng, endAng);
+                     ctx.lineWidth = 20 * (1 - progress); ctx.strokeStyle = effect.color; ctx.lineCap = "round"; ctx.stroke();
+                     ctx.beginPath(); ctx.arc(0, 0, effect.radius - 8, startAng, endAng);
+                     ctx.lineWidth = 6 * (1 - progress); ctx.strokeStyle = "#ffffff"; ctx.lineCap = "round"; ctx.stroke();
+                 }
+                 ctx.restore();
+             });
+
+             let angle = 0;
+             if (this.isSwinging) {
+                 const progress = 1 - (this.swingTimer / this.swingDuration);
+                 const lastEffect = this.slashEffects[this.slashEffects.length-1];
+                 const isSpin = lastEffect && (lastEffect.isSpin || lastEffect.isFinisher);
+                 if (isSpin) angle = this.targetAngle + (Math.PI * 4 * progress);
+                 else angle = Utils.lerp(this.targetAngle - 1.4 * this.swingDir, this.targetAngle + 1.4 * this.swingDir, progress);
+             } else {
+                 angle = Math.atan2(targetPoint.y - cy, targetPoint.x - cx);
+             }
+
+             ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle);
+             if (!this.isSwinging && Math.abs(angle) > Math.PI / 2) ctx.scale(1, -1);
+             let forwardOffset = this.isSwinging ? 25 : 15;
+             ctx.translate(forwardOffset, 0);
+             ctx.fillStyle = "#111"; ctx.fillRect(0, -3, 16, 6);
+             ctx.fillStyle = "#444"; ctx.fillRect(14, -8, 4, 16);
+             ctx.fillStyle = "#ccc";
+             ctx.beginPath(); ctx.moveTo(18, -2); ctx.lineTo(18 + this.hitboxRange * 0.8, -2);
+             ctx.lineTo(18 + this.hitboxRange * 0.8 + 10, 0); ctx.lineTo(18 + this.hitboxRange * 0.8, 2);
+             ctx.lineTo(18, 2); ctx.closePath(); ctx.fill();
+             const glowColor = (this.comboStep === 2 && this.comboTimer > 0) ? "#ffd633" : "#9ad8ff";
+             ctx.fillStyle = glowColor;
+             ctx.beginPath(); ctx.moveTo(18, -2); ctx.lineTo(18 + this.hitboxRange * 0.8, -2);
+             ctx.lineTo(18 + this.hitboxRange * 0.8 + 10, 0); ctx.closePath(); ctx.fill();
+             ctx.restore();
+         }
+     }
+
+
+     class Entity {
+       constructor(x, y, w, h, color) {
+         this.x = x; this.y = y; this.width = w; this.height = h; this.color = color;
+         this.dx = 0; this.dy = 0; this.onGround = false; this.onWall = false;
+         this.scaleX = 1; this.scaleY = 1; this.facing = "right";
+         this.isDashing = false; this.hitFlashTimer = 0; this.hasEyes = false;
+         this.showHealthBar = false; this.currentWeapon = null; this.isDead = false;
+         this.markedForDeletion = false;
+         this.iFrames = 0;
+         this.parryActive = false; this.parryTimer = 0; this.parryDuration = 12;
+       }
+       updateAnimation() {
+         this.scaleX = Utils.lerp(this.scaleX, 1, 0.2); this.scaleY = Utils.lerp(this.scaleY, 1, 0.2);
+         if (this.hitFlashTimer > 0) this.hitFlashTimer--;
+         if (this.iFrames > 0) this.iFrames--;
+         if (this.parryTimer > 0) this.parryTimer--;
+         else this.parryActive = false;
+       }
+     }
+
+
+     class Actor extends Entity {
+       constructor(x, y, w, h, color, health) {
+         super(x, y, w, h, color); this.health = health; this.maxHealth = health;
+         this.wallJumps = 0; this.dashes = 0;
+       }
+       takeDamage(amount) {
+         if (this.isDead) return;
+         if (this.iFrames > 0) return;
+         this.health -= amount; this.hitFlashTimer = 5;
+       }
+     }
+
+
+     class Player extends Actor {
+       constructor() {
+         super(100, 900, 24, 24, Config.COLORS.PLAYER, 100);
+         this.hasEyes = true; this.eyeColor = Config.COLORS.PLAYER_EYES;
+         this.wallJumpsMax = 3; this.wallJumps = 3; this.maxDashes = 1; this.dashes = 1;
+         this.dashFrameTimer = 0; this.dashDir = { x: 0, y: 0 };
+         this.coyoteTimer = 0; this.jumpBufferTimer = 0;
+         this.weapons = [new PelletGun(), new Shotgun(), new VoltKatana()];
+         this.weaponIndex = 0; this.currentWeapon = this.weapons[0];
+         this.shrine = new MalevolentShrine(this);
+         // open-ended parry
+         this.parryCooldown = 0;
+         this.onParry = null; // hook for external systems (rebound bullets, etc.)
+       }
+       update(context) {
+         this.checkDeathAndRespawn(context);
+         this.updateAnimation();
+         this._handleInput(context);
+         this._handlePhysics(context);
+         this._checkWorldBounds();
+         if (this.currentWeapon) this.currentWeapon.update(context, this);
+         this.shrine.update(context);
+         if (this.parryCooldown > 0) this.parryCooldown--;
+       }
+       checkDeathAndRespawn(context) {
+           if(this.health <= 0) {
+               context.particles.emitExplosion(this.x + this.width/2, this.y + this.height/2, this.color);
+               context.camera.shake(10);
+               context.game.freezeFrames = 5;
+               this.health = this.maxHealth;
+               this.x = 100; this.y = 900; this.dx = 0; this.dy = 0;
+               this.isDashing = false; this.isDead = false;
+           }
+       }
+       startParry() {
+         if (this.parryCooldown > 0) return false;
+         this.parryActive = true; this.parryTimer = this.parryDuration; this.parryCooldown = 20;
+         return true;
+       }
+       // Open-ended: notify whatever registered onParry that a parry happened.
+       // Default behaviour is a deflection; systems can override via onParry callback.
+       parry(context, source) {
+         if (typeof this.onParry === "function") {
+           return this.onParry(this, source, context);
+         }
+         return true;
+       }
+       _handleInput(context) {
+         const input = context.input;
+         if (input.isPressed("e") || input.isPressed("q")) {
+             this.weaponIndex = (this.weaponIndex + 1) % this.weapons.length;
+             this.currentWeapon = this.weapons[this.weaponIndex];
+         }
+         if (context.input.isPressed("g")) {
+           if (this.shrine.activate()) context.game._playShrineCutscene();
+         }
+         // Right-click parry (open-ended)
+         if (input.mouse.rightPressed) this.startParry();
+
+         if (this.onGround) this.coyoteTimer = 6; else this.coyoteTimer--;
+         if (input.isPressed("w")) this.jumpBufferTimer = 5; else this.jumpBufferTimer--;
+         if (!input.isDown("w") && this.dy < -3 && !this.isDashing) this.dy *= Config.PHYSICS.JUMP_CUTOFF;
+         if (input.isPressed("shift") && this.dashes > 0 && !this.isDashing) this._startDash(context, input);
+         if (this.currentWeapon) {
+            const shouldFire = this.currentWeapon.isAuto ? input.mouse.down : input.mouse.pressed;
+            if (shouldFire && this.currentWeapon.canAttack()) this.currentWeapon.attack(context, this);
+         }
+       }
+       _startDash(context, input) {
+         this.isDashing = true; this.dashes--; this.dashFrameTimer = Config.PHYSICS.DASH_DURATION;
+         let dx = 0; let dy = 0;
+         if (input.isDown("w")) dy = -1; if (input.isDown("s")) dy = 1;
+         if (input.isDown("a")) dx = -1; if (input.isDown("d")) dx = 1;
+         if (dx === 0 && dy === 0) dx = this.facing === "left" ? -1 : 1;
+         const len = Math.sqrt(dx * dx + dy * dy);
+         if (len !== 0) { dx /= len; dy /= len; }
+         this.dashDir = { x: dx, y: dy };
+         this.dx = this.dashDir.x * Config.PHYSICS.DASH_SPEED; this.dy = this.dashDir.y * Config.PHYSICS.DASH_SPEED;
+         context.camera.shake(4); context.game.freezeFrames = 3;
+         context.particles.emitGhost(this.x, this.y, this.width, this.height, Config.COLORS.DASH_ACTIVE);
+       }
+       _handlePhysics(context) {
+         if (this.isDashing) this._updateDashPhysics(context);
+         else {
+           let dir = 0;
+           if (context.input.isDown("a")) { dir = -1; this.facing = "left"; } else if (context.input.isDown("d")) { dir = 1; this.facing = "right"; }
+           if (dir !== 0) {
+             if (Math.abs(this.dx) > Config.PHYSICS.RUN_SPEED && Math.sign(this.dx) === dir) {
+               const friction = this.onGround ? Config.PHYSICS.GROUND_FRICTION : Config.PHYSICS.AIR_RESISTANCE;
+               this.dx *= friction;
+             } else {
+               this.dx += dir * Config.PHYSICS.ACCEL;
+               if (Math.abs(this.dx) > Config.PHYSICS.RUN_SPEED && Math.sign(this.dx) === dir) this.dx = dir * Config.PHYSICS.RUN_SPEED;
+             }
+           } else context.physics.applyFriction(this);
+           if (this.jumpBufferTimer > 0 && this.coyoteTimer > 0) { this._jump(context, false); this.jumpBufferTimer = 0; this.coyoteTimer = 0; }
+           if (this.onWall && this.wallJumps > 0 && context.input.isPressed("w")) this._jump(context, true);
+           context.physics.applyGravity(this);
+           context.physics.resolveCollisions(this);
+           if (this.onGround) { this.wallJumps = this.wallJumpsMax; this.dashes = this.maxDashes; }
+         }
+       }
+       _updateDashPhysics(context) {
+         this.dashFrameTimer--;
+         this.dx = this.dashDir.x * Config.PHYSICS.DASH_SPEED; this.dy = this.dashDir.y * Config.PHYSICS.DASH_SPEED;
+         if (this.dashFrameTimer % 2 === 0) context.particles.emitGhost(this.x, this.y, this.width, this.height, "rgba(255, 255, 255, 0.5)");
+         if (this.dashFrameTimer <= 0) { this.isDashing = false; this.dx *= 0.8; this.dy *= 0.5; }
+         context.physics.resolveCollisions(this);
+       }
+       _jump(context, isWall) {
+         if (isWall) {
+           this.dashes = this.maxDashes;
+           if (this.isDashing && this.dashDir.y < 0) { this.isDashing = false; this.dy = Config.PHYSICS.JUMP_POWER * 1.3; }
+           else if (!context.input.isDown("a") && !context.input.isDown("d")) { this.dy = Config.PHYSICS.JUMP_POWER; this.dx = this.onWall === "left" ? 3 : -3; }
+           else { this.dy = Config.PHYSICS.JUMP_POWER; this.dx = this.onWall === "left" ? 6 : -6; }
+           this.wallJumps--; this.facing = this.onWall === "left" ? "right" : "left";
+           context.particles.emitDust(this.onWall === "left" ? this.x : this.x + this.width, this.y + this.height / 2);
+         } else {
+           this.dy = Config.PHYSICS.JUMP_POWER;
+           context.particles.emitDust(this.x + this.width / 2, this.y + this.height);
+         }
+         this.scaleX = 0.6; this.scaleY = 1.4;
+       }
+       _checkWorldBounds() { if (this.y > Config.WORLD.HEIGHT + 100) this.health = 0; }
+     }
+
+
+class Enemy extends Actor {
+ constructor(x, y) {
+   super(x, y, 24, 24, Config.COLORS.ENEMY, 80);
+   this.hasEyes = true;
+   this.eyeColor = Config.COLORS.ENEMY_EYES;
+   this.showHealthBar = true;
+   this.deathTimer = 0;
+   this.state = "IDLE";
+   this.stateTimer = 0;
+   this.visionRange = 520;
+   this.attackRange = 420;
+   this.shootCooldownMax = 38; // fast, aggressive fire
+   this.shootTimer = Math.random() * 30;
+   this.moveDir = 0;
+   this.jumpCooldown = 0;
+   this.currentWeapon = new PelletGun();
+ }
+ takeDamage(amount) {
+   if (this.isDead) return;
+   super.takeDamage(amount);
+   this.state = "CHASE";
+   if (this.health <= 0) {
+     this.isDead = true;
+     this.color = Config.COLORS.ENEMY_DEAD;
+     this.deathTimer = 40;
+     this.showHealthBar = false;
+     this.hasEyes = false;
+   }
+ }
+ update(context) {
+   if (this.isDead) {
+     this.dx = 0; this.dy = 0;
+     this.deathTimer--;
+     if (this.deathTimer <= 0) {
+       this.markedForDeletion = true;
+       context.particles.emitExplosion(this.x + this.width / 2, this.y + this.height / 2, "#aa2200");
+     }
+     return;
+   }
+   this._think(context);
+   this._applyMovement(context);
+   this.updateAnimation();
+   if (this.currentWeapon) this.currentWeapon.update(context, this);
+   if (this.shootTimer > 0) this.shootTimer--;
+   context.physics.applyGravity(this);
+   context.physics.resolveCollisions(this);
+   if (this.jumpCooldown > 0) this.jumpCooldown--;
+ }
+ _think(context) {
+   const player = context.game.player;
+   const dist = Utils.dist(this.x, this.y, player.x, player.y);
+   if (dist < this.visionRange) this.state = (dist < this.attackRange) ? "ATTACK" : "CHASE";
+   else this.state = "PATROL";
+   switch (this.state) {
+     case "CHASE":
+       this.moveDir = player.x < this.x ? -1 : 1;
+       this._handleObstacles(context, player);
+       break;
+     case "ATTACK":
+       this.moveDir = player.x < this.x ? -0.2 : 0.2;
+       if (this.shootTimer <= 0 && this.currentWeapon) {
+         const aimTarget = {
+           x: player.x + player.width/2 + Utils.rand(-20, 20),
+           y: player.y + player.height/2 + Utils.rand(-20, 20)
+         };
+         const angle = Utils.getAngle(this.x, this.y, aimTarget.x, aimTarget.y);
+         this.currentWeapon.fire(context, this, angle);
+         this.shootTimer = this.shootCooldownMax + Math.random() * 20;
+       }
+       break;
+     case "PATROL":
+       if (this.stateTimer <= 0) {
+         this.moveDir = Math.random() > 0.5 ? 1 : -1;
+         this.stateTimer = 100 + Math.random() * 100;
+       }
+       this.stateTimer--;
+       this._handleObstacles(context, null);
+       break;
+   }
+ }
+ _handleObstacles(context, player) {
+   if (this.onWall && this.jumpCooldown <= 0) { this.dy = Config.PHYSICS.JUMP_POWER * 0.9; this.jumpCooldown = 30; }
+   if (player && player.y < this.y - 60 && this.onWall) { this.dy = Config.PHYSICS.JUMP_POWER * 1.1; this.dx = this.onWall === "left" ? 5 : -5; this.jumpCooldown = 25; }
+   if (Math.abs(this.dx) < 0.2 && this.onGround && this.moveDir !== 0 && this.jumpCooldown <= 0) { this.dy = Config.PHYSICS.JUMP_POWER * 0.7; this.jumpCooldown = 50; }
+ }
+ _applyMovement(context) {
+   const accel = this.onGround ? Config.PHYSICS.ACCEL * 0.5 : Config.PHYSICS.ACCEL * 0.2;
+   const maxSpeed = Config.PHYSICS.RUN_SPEED * 0.6;
+   this.dx += this.moveDir * accel;
+   if (Math.abs(this.dx) > maxSpeed) this.dx = Math.sign(this.dx) * maxSpeed;
+   context.physics.applyFriction(this);
+ }
+}
+
+
+class MalevolentShrine {
+ constructor(owner) {
+   this.owner = owner;
+   this.isActive = false;
+   this.timer = 0;
+   this.duration = 300;
+   this.radius = Math.hypot(Config.WORLD.WIDTH, Config.WORLD.HEIGHT); // entire map
+   this.cooldown = 0;
+   this.maxCooldown = 900;
+   this.origin = { x: 0, y: 0 };
+ }
+ activate() {
+   if (this.cooldown > 0) return false;
+   this.isActive = true;
+   this.timer = this.duration;
+   this.cooldown = this.maxCooldown;
+   this.origin = { x: this.owner.x + this.owner.width/2, y: this.owner.y + this.owner.height/2 };
+   return true;
+ }
+ update(context) {
+   if (this.cooldown > 0) this.cooldown--;
+   if (!this.isActive) return;
+   this.timer--;
+   if (this.timer <= 0) { this.isActive = false; return; }
+   context.game.enemies.forEach(enemy => {
+     if (enemy.isDead) return;
+     if (this.timer % 3 === 0) {
+       enemy.takeDamage(2);
+       context.particles.emitExplosion(enemy.x + Utils.rand(0, 20), enemy.y + Utils.rand(0, 20), "#cc0000");
+       context.particles.emitSlash(enemy.x + enemy.width/2 + Utils.rand(-15, 15), enemy.y + enemy.height/2 + Utils.rand(-15, 15), "#ffffff", Utils.rand(40, 80));
+       if (Math.random() > 0.8) context.camera.shake(2);
+     }
+   });
+ }
+ draw(ctx) {
+   if (!this.isActive) return;
+   // world-spanning faint veil instead of a small circle
+   ctx.save();
+   ctx.fillStyle = "rgba(120, 0, 0, 0.06)";
+   ctx.fillRect(0, 0, Config.WORLD.WIDTH, Config.WORLD.HEIGHT);
+   ctx.restore();
+   // shrine structure stays at cast location
+   ctx.save();
+   ctx.translate(this.origin.x, this.origin.y + 12);
+   const glow = ctx.createRadialGradient(0, -100, 0, 0, -100, 200);
+   glow.addColorStop(0, "rgba(180, 0, 0, 0.35)");
+   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+   ctx.fillStyle = glow; ctx.fillRect(-200, -300, 400, 400);
+   ctx.fillStyle = "#1a0c08"; ctx.fillRect(-100, -20, 200, 40);
+   ctx.fillStyle = "#2a1410"; ctx.fillRect(-80, -30, 160, 10);
+   ctx.fillStyle = "#cfcabd";
+   const drawSkull = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI*2); ctx.fill(); };
+   const skullPositions = [
+     [-60, -15], [-40, -10], [-20, -5], [0, -2], [20, -8], [40, -12], [60, -18],
+     [-70, -5], [-50, 0], [-30, 5], [-10, 8], [10, 5], [30, 2], [50, -5], [70, -10],
+     [-80, 5], [-60, 10], [-40, 15], [-20, 18], [0, 20], [20, 18], [40, 12], [60, 8], [80, 0]
+   ];
+   skullPositions.forEach(pos => drawSkull(pos[0], pos[1]));
+   ctx.fillStyle = "#1a0505"; ctx.fillRect(-60, -150, 120, 120);
+   ctx.fillStyle = "#000";
+   ctx.beginPath(); ctx.moveTo(-30, -30); ctx.lineTo(-30, -120); ctx.lineTo(30, -120); ctx.lineTo(30, -30); ctx.fill();
+   ctx.fillStyle = "#eee";
+   for(let i=0; i<6; i++) {
+     ctx.beginPath(); ctx.moveTo(-25 + i*10, -120); ctx.lineTo(-20 + i*10, -105); ctx.lineTo(-15 + i*10, -120); ctx.fill();
+     ctx.beginPath(); ctx.moveTo(-25 + i*10, -30); ctx.lineTo(-20 + i*10, -45); ctx.lineTo(-15 + i*10, -30); ctx.fill();
+   }
+   ctx.fillStyle = "#3a0a0a";
+   ctx.beginPath(); ctx.moveTo(-100, -150); ctx.quadraticCurveTo(0, -180, 100, -150); ctx.lineTo(80, -165); ctx.lineTo(-80, -165); ctx.fill();
+   ctx.beginPath(); ctx.moveTo(-80, -165); ctx.quadraticCurveTo(0, -200, 80, -165); ctx.lineTo(60, -185); ctx.lineTo(-60, -185); ctx.fill();
+   ctx.beginPath(); ctx.moveTo(-60, -185); ctx.quadraticCurveTo(0, -220, 60, -185); ctx.lineTo(30, -210); ctx.lineTo(-30, -210); ctx.fill();
+   ctx.fillStyle = "#5a1a1a"; ctx.fillRect(-4, -250, 8, 40);
+   ctx.beginPath(); ctx.arc(0, -250, 8, 0, Math.PI*2); ctx.fill();
+   ctx.fillStyle = "#4a0a0a"; ctx.fillRect(-55, -150, 10, 120); ctx.fillRect(45, -150, 10, 120);
+   ctx.restore();
+   // random slashes scattered across the whole map
+   for(let i=0; i<4; i++) {
+     const x = Utils.rand(40, Config.WORLD.WIDTH - 40);
+     const y = Utils.rand(40, Config.WORLD.HEIGHT - 40);
+     ctx.strokeStyle = "rgba(255, 255, 255, 0.5)"; ctx.lineWidth = 1;
+     ctx.beginPath(); ctx.moveTo(x - 30, y - 5); ctx.lineTo(x + 30, y + 5); ctx.stroke();
+   }
+ }
+}
+
+
+     class Bullet extends Entity {
+       constructor(x, y, dx, dy, isPlayer) {
+         super(x, y, 0, 0, "#fff"); this.dx = dx; this.dy = dy; this.isPlayer = isPlayer; this.radius = 3;
+         this.parried = false;
+       }
+       update(context) { this.x += this.dx; this.y += this.dy; }
+     }
+
+
+     class BulletManager {
+       constructor() { this.bullets = []; }
+       add(bullet) { this.bullets.push(bullet); }
+       update(context) {
+         for (let i = this.bullets.length - 1; i >= 0; i--) {
+           const b = this.bullets[i]; b.update(context);
+           context.particles.emitTrail(b.x, b.y, b.isPlayer ? "#ffffff" : "#ff9933", b.radius);
+           if (b.x < 0 || b.x > Config.WORLD.WIDTH || b.y < 0 || b.y > Config.WORLD.HEIGHT) { this.bullets.splice(i, 1); continue; }
+           let hitPlat = false;
+           for (let plat of context.level.platforms) {
+             if (Utils.checkAABB({ x: b.x - b.radius, y: b.y - b.radius, width: b.radius * 2, height: b.radius * 2 }, plat)) {
+               hitPlat = true; context.particles.emitExplosion(b.x, b.y, "#ccc"); break;
+             }
+           }
+           if (hitPlat) { this.bullets.splice(i, 1); continue; }
+
+           // Parry: only enemy bullets, and only when the player's parry window is open.
+           if (!b.isPlayer) {
+             const p = context.game.player;
+             if (p.parryActive && p.parryTimer > 0) {
+               const cx = p.x + p.width/2, cy = p.y + p.height/2;
+               const r = p.width * 1.4;
+               if (Utils.dist(b.x, b.y, cx, cy) < r + b.radius) {
+                 // Open-ended: hand off to the player's parry handler.
+                 const handled = p.parry(context, b);
+                 if (handled !== false) {
+                   // default deflection: flip it back toward the nearest enemy, mark as player-owned
+                   b.isPlayer = true; b.parried = true;
+                   const speed = Math.hypot(b.dx, b.dy) || 12;
+                   const tgt = this._nearestEnemy(context, b);
+                   const ang = tgt ? Utils.getAngle(b.x, b.y, tgt.x + tgt.width/2, tgt.y + tgt.height/2) : Math.atan2(-b.dy, -b.dx);
+                   b.dx = Math.cos(ang) * speed * 1.4; b.dy = Math.sin(ang) * speed * 1.4;
+                   b.x += b.dx; b.y += b.dy; // nudge out of the shield
+                   context.particles.emitExplosion(b.x, b.y, "#ffffff");
+                   context.camera.shake(4);
+                   p.iFrames = Math.max(p.iFrames, 10);
+                   continue; // don't process the same bullet for damage this frame
+                 }
+               }
+             }
+           }
+
+           if (b.isPlayer) {
+             const enemies = context.game.enemies;
+             for (let j = enemies.length - 1; j >= 0; j--) {
+               let e = enemies[j]; if (e.isDead) continue;
+               if (Utils.checkAABB({ x: b.x, y: b.y, width: b.radius, height: b.radius }, e)) {
+                 e.takeDamage(20); context.particles.emitExplosion(b.x, b.y, Config.COLORS.ENEMY); this.bullets.splice(i, 1); break;
+               }
+             }
+           } else {
+               const p = context.game.player;
+               if(Utils.checkAABB({x: b.x, y:b.y, width: b.radius, height: b.radius}, p)) {
+                   p.takeDamage(10); context.particles.emitExplosion(b.x, b.y, Config.COLORS.PLAYER); this.bullets.splice(i, 1);
+               }
+           }
+         }
+       }
+       _nearestEnemy(context, b) {
+         let best = null, bestD = Infinity;
+         for (const e of context.game.enemies) {
+           if (e.isDead) continue;
+           const d = Utils.dist(b.x, b.y, e.x, e.y);
+           if (d < bestD) { bestD = d; best = e; }
+         }
+         return best;
+       }
+       draw(renderSystem) { this.bullets.forEach((b) => renderSystem.drawBullet(b)); }
+     }
+
+
+     class Level {
+       constructor() {
+         const w = Config.WORLD.WIDTH; const h = Config.WORLD.HEIGHT;
+         this.platforms = [
+           { x: -40, y: 0, width: 40, height: h }, { x: w, y: 0, width: 40, height: h },
+           { x: 0, y: -40, width: w, height: 40 }, { x: 0, y: h - 40, width: w, height: 80 },
+           { x: 0, y: 1000, width: 250, height: 20 }, { x: 250, y: 900, width: 20, height: 120 },
+           { x: 400, y: 950, width: 150, height: 20 }, { x: 700, y: 850, width: 150, height: 20 },
+           { x: 1000, y: 950, width: 150, height: 20 }, { x: 1700, y: 600, width: 20, height: 600 },
+           { x: 1850, y: 800, width: 100, height: 20 }, { x: 150, y: 750, width: 400, height: 20 },
+           { x: 800, y: 650, width: 400, height: 20 }, { x: 600, y: 500, width: 20, height: 250 },
+           { x: 1200, y: 500, width: 20, height: 250 }, { x: 200, y: 550, width: 150, height: 20 },
+           { x: 50, y: 400, width: 200, height: 20 }, { x: 650, y: 350, width: 200, height: 20 },
+           { x: 1050, y: 350, width: 200, height: 20 }, { x: 1500, y: 250, width: 400, height: 20 },
+           { x: 1400, y: 150, width: 20, height: 120 },
+         ];
+       }
+     }
+
+
+     // Simple cutscene director: bars in, dialogue, bars out. Drives camera zoom too.
+     class CutsceneSystem {
+       constructor(game) {
+         this.game = game; this.active = false; this.queue = []; this.current = null;
+         this.t = 0;
+       }
+       play(steps) { this.queue = steps.slice(); this.active = true; this._next(); }
+       _next() {
+         if (!this.queue.length) { this._end(); return; }
+         this.current = this.queue.shift(); this.t = 0;
+         if (this.current.zoom !== undefined) this.game.camera.setZoom(this.current.zoom);
+         if (this.current.focus) this.game.cameraCutsceneFocus = this.current.focus;
+       }
+       _end() {
+         this.active = false; this.current = null;
+         this.game.camera.setZoom(1);
+         this.game.cameraCutsceneFocus = null;
+         this.game.cinematicLayer.classList.remove("active");
+       }
+       update() {
+         if (!this.active || !this.current) return;
+         this.t++;
+         this.game.cinematicLayer.classList.add("active");
+         const step = this.current;
+         if (step.dialogue !== undefined) this.game.dialogueBox.textContent = step.dialogue;
+         if (this.t >= step.duration) this._next();
+       }
+     }
+
+
+     class Game {
+       constructor() {
+         this.canvas = document.getElementById("game"); this.ctx = this.canvas.getContext("2d");
+         this.input = new InputHandler(this.canvas); this.camera = new Camera();
+         this.particles = new ParticleSystem(); this.level = new Level();
+         this.physics = new PhysicsSystem(this.level); this.renderer = new RenderSystem(this.ctx, this.camera);
+         this.ui = new UIManager(); this.bulletManager = new BulletManager();
+         this.freezeFrames = 0;
+         this.cinematicLayer = document.getElementById("cinematic-layer");
+         this.dialogueBox = document.getElementById("dialogue-box");
+         this.cameraCutsceneFocus = null;
+         this.cutscenes = new CutsceneSystem(this);
+         this.reset();
+         this.loop = this.loop.bind(this); requestAnimationFrame(this.loop);
+         this._playSpawnCutscene();
+       }
+       reset() {
+         this.player = new Player();
+         this.enemies = [
+             new Enemy(400, 900), new Enemy(600, 900), new Enemy(1200, 900),
+             new Enemy(200, 700), new Enemy(900, 600), new Enemy(1100, 300),
+             new Enemy(1600, 200), new Enemy(1800, 750)
+         ];
+         this.bulletManager.bullets = [];
+         this.ui.init(this.player.wallJumpsMax, this.player.maxDashes);
+       }
+       _playSpawnCutscene() {
+         this.cutscenes.play([
+           { duration: 80, zoom: 1.6, focus: { x: 100, y: 900 }, dialogue: "You wake under an open sky." },
+           { duration: 70, zoom: 1.2, focus: { x: 400, y: 900 }, dialogue: "Something here wants you dead." },
+           { duration: 60, zoom: 1.0, dialogue: "" }
+         ]);
+       }
+       _playShrineCutscene() {
+         const o = this.player.shrine.origin;
+         this.cutscenes.play([
+           { duration: 50, zoom: 1.8, focus: { x: o.x, y: o.y }, dialogue: "The shrine answers." },
+           { duration: 60, zoom: 1.0, dialogue: "" }
+         ]);
+       }
+       get context() { return { input: this.input, camera: this.camera, particles: this.particles, level: this.level, physics: this.physics, bulletManager: this.bulletManager, game: this }; }
+       update() {
+         this.cutscenes.update();
+         // camera target overrides during cutscene
+         let camTarget = this.player;
+         if (this.cutscenes.active && this.cameraCutsceneFocus) {
+           camTarget = { x: this.cameraCutsceneFocus.x - 12, y: this.cameraCutsceneFocus.y - 12, width: 24, height: 24 };
+         }
+         this.camera.update(camTarget, this.canvas.width, this.canvas.height);
+         this.particles.update();
+         this.player.update(this.context);
+         for (let i = this.enemies.length - 1; i >= 0; i--) { const e = this.enemies[i]; e.update(this.context); if(e.markedForDeletion) this.enemies.splice(i, 1); }
+         this.bulletManager.update(this.context);
+         const allEntities = [this.player, ...this.enemies];
+         this.physics.resolveEntitySeparation(allEntities);
+         this.ui.update(this.player);
+         this.input.clearFrame();
+       }
+       draw() {
+         this.renderer.clear(this.canvas.width, this.canvas.height);
+         // clouds drawn in screen space (parallax), before world transform
+         this.renderer.drawClouds(this.camera);
+         this.ctx.save();
+         // zoom about screen center for cutscenes
+         const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
+         this.ctx.translate(cx, cy);
+         this.ctx.scale(this.camera.zoom, this.camera.zoom);
+         this.ctx.translate(-cx, -cy);
+         this.renderer.begin();
+         this.renderer.drawLevel(this.level);
+         this.player.shrine.draw(this.ctx);
+         this.particles.draw(this.ctx);
+         this.enemies.forEach((e) => this.renderer.drawEntity(e, { x: this.player.x + this.player.width / 2, y: this.player.y + this.player.height / 2 }));
+         this.renderer.drawEntity(this.player, { x: this.input.mouse.x + this.camera.x, y: this.input.mouse.y + this.camera.y });
+         this.bulletManager.draw(this.renderer);
+         this.renderer.end();
+         this.ctx.restore();
+         this.renderer.drawCursor(this.input.mouse);
+       }
+       loop() {
+         if (this.freezeFrames > 0) { this.freezeFrames--; requestAnimationFrame(this.loop); return; }
+         this.update(); this.draw(); requestAnimationFrame(this.loop);
+       }
+     }
+
+
+     const game = new Game();
+   </script>
+ </body>
+</html>
