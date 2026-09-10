@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Neon Square</title>
+    <meta name="description"
+        content="Fast-paced neon cyberpunk platformer set in a dynamic sci-fi cityscape with stylized combat and wall jumps." />
+    <meta property="og:title" content="Neon Square" />
+    <meta property="og:description"
+        content="Fast-paced neon cyberpunk platformer set in a dynamic sci-fi cityscape with stylized combat and wall jumps." />
+    <style>
+        /* --- RESET & LAYOUT --- */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            width: 800px;
+            height: 450px;
+            margin: 0;
+            padding: 0;
+            background: #050505;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+            font-family: "Segoe UI", sans-serif;
+            user-select: none;
+        }
+
+        #popout-btn {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 11px;
+            color: #00f3ff;
+            background: rgba(0, 0, 0, 0.75);
+            border: 1px solid rgba(0, 243, 255, 0.4);
+            border-radius: 4px;
+            padding: 4px 9px;
+            cursor: pointer;
+            z-index: 50;
+            font-family: monospace;
+            user-select: none;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            line-height: 1;
+        }
+
+        #popout-btn:hover {
+            background: rgba(0, 243, 255, 0.25);
+            border-color: #00f3ff;
+            color: #fff;
+            box-shadow: 0 0 10px rgba(0, 243, 255, 0.4);
+        }
+
+        #game-container {
+            position: relative;
+            width: 800px;
+            height: 450px;
+            background: #000;
+            box-shadow: 0 0 50px rgba(0, 243, 255, 0.1);
+            overflow: hidden;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: block;
+            width: 100%;
+            height: 100%;
+            background: #0a0a10;
+            cursor: none;
+            z-index: 0;
+        }
+
+        /* UI HUD */
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 220px;
+            height: auto;
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 12px;
+        }
+
+        .ui-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .label {
+            color: #fff;
+            margin-right: 10px;
+            min-width: 70px;
+        }
+
+        .hp-container {
+            flex-grow: 1;
+            height: 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #hp-fill {
+            height: 100%;
+            width: 100%;
+            background-color: #ffff00;
+            transition: width 0.1s linear, background-color 0.2s;
+        }
+
+        .weapon-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            width: 100%;
+        }
+
+        #weapon-name {
+            font-size: 10px;
+            color: #aaa;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .cd-container {
+            width: 100px;
+            height: 6px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #cd-fill {
+            height: 100%;
+            width: 100%;
+            background-color: #00f3ff;
+            transition: width 0.1s linear;
+        }
+
+        #shrine-cd-fill {
+            height: 100%;
+            width: 100%;
+            background-color: #ff0055;
+            transition: width 0.1s linear;
+        }
+
+        .pips-container {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+        }
+
+        .pip {
+            position: relative;
+            width: 18px;
+            height: 10px;
+            background-color: #20242e;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+            transition: background-color 0.1s, box-shadow 0.1s, border-color 0.1s;
+        }
+
+        .pip.jump-active {
+            background-color: #ffff00;
+            border-color: #ffff00;
+            box-shadow: 0 0 6px #ffff00;
+        }
+
+        .pip.dash-active {
+            background-color: #00f3ff;
+            border-color: #00f3ff;
+            box-shadow: 0 0 7px #00f3ff;
+        }
+
+        .pip.dash-active .pip-fill {
+            display: none;
+        }
+
+        .pip.dash-charging {
+            background-color: #12151d;
+            border-color: rgba(0, 243, 255, 0.4);
+        }
+
+        .pip-fill {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 0%;
+            background-color: #00f3ff;
+            opacity: 0.85;
+            transition: width 0.05s linear;
+        }
+
+        /* CINEMATIC & FADE */
+        #cinematic-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        #cinematic-layer.active {
+            opacity: 1;
+        }
+
+        .cine-bar {
+            width: 100%;
+            height: 0;
+            background-color: #000;
+            transition: height 0.5s ease;
+        }
+
+        #cinematic-layer.active .cine-bar {
+            height: 60px;
+        }
+
+        #dialogue-box {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #fff;
+            padding: 20px;
+            text-align: center;
+            font-family: "Courier New", monospace;
+            display: none;
+        }
+
+        #cinematic-layer.active #dialogue-box {
+            display: block;
+        }
+
+        #fade-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            z-index: 30;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 1s ease;
+        }
+
+        #fade-overlay.black {
+            opacity: 1;
+        }
+
+        #wave-banner {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0.8);
+            font-family: "Segoe UI", sans-serif;
+            text-align: center;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 25;
+        }
+
+        #wave-banner.show {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.05);
+        }
+
+        #wave-title {
+            font-size: 34px;
+            font-weight: 900;
+            color: #ff0055;
+            text-shadow: 0 0 25px rgba(255, 0, 85, 0.85);
+            letter-spacing: 6px;
+            text-transform: uppercase;
+        }
+
+        #wave-sub {
+            font-size: 13px;
+            font-weight: bold;
+            color: #00f3ff;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 4px;
+            text-shadow: 0 0 10px rgba(0, 243, 255, 0.7);
+        }
+
+        /* BOSS HEALTH HUD */
+        #boss-hud {
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 380px;
+            background: rgba(10, 5, 12, 0.85);
+            border: 1px solid #ff003c;
+            box-shadow: 0 0 20px rgba(255, 0, 60, 0.4);
+            border-radius: 6px;
+            padding: 8px 14px;
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            z-index: 20;
+            transition: opacity 0.3s;
+        }
+
+        #boss-hud.active {
+            display: flex;
+        }
+
+        .boss-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 2px;
+            color: #ff003c;
+            text-transform: uppercase;
+        }
+
+        .boss-bar-bg {
+            width: 100%;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 0, 60, 0.3);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        #boss-hp-fill {
+            height: 100%;
+            width: 100%;
+            background: linear-gradient(90deg, #ff0055, #ff5500);
+            box-shadow: 0 0 8px #ff0055;
+            transition: width 0.08s linear;
+        }
+
+        /* STYLE SYSTEM HUD */
+        .style-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        #style-badge {
+            font-size: 18px;
+            font-weight: 900;
+            color: #888;
+            min-width: 32px;
+            text-align: center;
+            text-shadow: 0 0 8px currentColor;
+            transition: transform 0.15s ease, color 0.2s ease;
+        }
+
+        #style-badge.rank-up {
+            transform: scale(1.35);
+        }
+
+        .style-meter-bg {
+            flex-grow: 1;
+            height: 8px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        #style-fill {
+            height: 100%;
+            width: 0%;
+            background: #888;
+            transition: width 0.08s linear, background-color 0.2s;
+        }
+
+        /* CONTROLS HINT & AUDIO BUTTON */
+        #controls-hint {
+            position: absolute;
+            bottom: 8px;
+            left: 12px;
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.45);
+            letter-spacing: 0.5px;
+            z-index: 10;
+            pointer-events: none;
+            font-family: monospace;
+        }
+
+        #audio-toggle {
+            position: absolute;
+            bottom: 8px;
+            right: 12px;
+            font-size: 10px;
+            color: #00f3ff;
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(0, 243, 255, 0.4);
+            border-radius: 4px;
+            padding: 3px 8px;
+            cursor: pointer;
+            z-index: 25;
+            font-family: monospace;
+            user-select: none;
+            transition: background 0.15s;
+        }
+
+        #audio-toggle:hover {
+            background: rgba(0, 243, 255, 0.2);
+        }
+
+        /* OVERDRIVE BADGE */
+        #overdrive-badge {
+            display: none;
+            background: rgba(255, 230, 0, 0.2);
+            border: 1px solid #ffe600;
+            border-radius: 4px;
+            color: #ffe600;
+            font-size: 9px;
+            font-weight: 900;
+            letter-spacing: 1px;
+            text-align: center;
+            padding: 3px 0;
+            box-shadow: 0 0 10px rgba(255, 230, 0, 0.4);
+            animation: pulse-badge 0.6s infinite alternate;
+        }
+
+        #overdrive-badge.active {
+            display: block;
+        }
+
+        @keyframes pulse-badge {
+            from {
+                opacity: 0.8;
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1.02);
+            }
+        }
+
+        /* GAME OVER SCREEN */
+        #gameover-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(4, 4, 8, 0.92);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 50;
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+
+        #gameover-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .go-title {
+            font-size: 32px;
+            font-weight: 900;
+            color: #ff0055;
+            letter-spacing: 8px;
+            text-shadow: 0 0 20px #ff0055;
+            margin-bottom: 6px;
+        }
+
+        .go-subtitle {
+            font-size: 11px;
+            color: #888;
+            letter-spacing: 4px;
+            margin-bottom: 24px;
+            text-transform: uppercase;
+        }
+
+        .go-stats {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .go-stat-card {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            padding: 10px 16px;
+            border-radius: 6px;
+            text-align: center;
+            min-width: 85px;
+        }
+
+        .go-stat-val {
+            font-size: 20px;
+            font-weight: bold;
+            color: #00f3ff;
+            font-family: monospace;
+        }
+
+        .go-stat-lbl {
+            font-size: 9px;
+            color: #777;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 4px;
+        }
+
+        .reboot-btn {
+            padding: 10px 28px;
+            background: #00f3ff;
+            color: #050505;
+            font-weight: 900;
+            font-size: 12px;
+            letter-spacing: 2px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            box-shadow: 0 0 16px rgba(0, 243, 255, 0.5);
+            transition: transform 0.15s, background-color 0.15s, box-shadow 0.15s;
+        }
+
+        .reboot-btn:hover {
+            background: #ffffff;
+            box-shadow: 0 0 25px #00f3ff;
+            transform: scale(1.04);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="game-container">
+        <button id="popout-btn" title="Pop out into separate window">⤢ Popout</button>
+        <canvas id="game" width="800" height="450"></canvas>
+
+        <!-- Wave Announcement Banner -->
+        <div id="wave-banner">
+            <div id="wave-title">Wave 1</div>
+            <div id="wave-sub">// FIRST CONTACT</div>
+        </div>
+
+        <!-- Boss Health HUD -->
+        <div id="boss-hud">
+            <div class="boss-header">
+                <span id="boss-name">NEMESIS // APEX WARFRAME</span>
+                <span id="boss-phase-lbl">PHASE 1</span>
+            </div>
+            <div class="boss-bar-bg">
+                <div id="boss-hp-fill"></div>
+            </div>
+        </div>
+
+        <!-- Controls Hint & Audio Toggle -->
+        <div id="controls-hint">WASD Move | Shift Dash | LMB Fire | 1/2/3 Swap | G Shrine | R Reboot | P Audio</div>
+        <div id="audio-toggle" title="Click or press [P] to toggle sound">SFX: ON</div>
+
+        <!-- Main UI HUD -->
+        <div id="ui-layer">
+            <div id="ui-panel">
+                <!-- Style Rank -->
+                <div class="style-row">
+                    <span id="style-badge">D</span>
+                    <div class="style-meter-bg">
+                        <div id="style-fill"></div>
+                    </div>
+                </div>
+
+                <!-- Score -->
+                <div class="ui-row">
+                    <span class="label">Score</span>
+                    <span id="score-val"
+                        style="color: #00f3ff; font-family: monospace; font-size: 13px; font-weight: bold;">0</span>
+                </div>
+
+                <!-- Player Health -->
+                <div class="ui-row"><span class="label">HP</span>
+                    <div class="hp-container">
+                        <div id="hp-fill"></div>
+                    </div>
+                </div>
+
+                <!-- Wall Jumps & Dashes -->
+                <div class="ui-row"><span class="label">Wall Jumps</span>
+                    <div id="jumps-container" class="pips-container"></div>
+                </div>
+                <div class="ui-row"><span class="label">Dashes</span>
+                    <div id="dashes-container" class="pips-container"></div>
+                </div>
+
+                <!-- Overdrive Status Badge -->
+                <div id="overdrive-badge">⚡ OVERDRIVE FRENZY ⚡</div>
+
+                <!-- Weapon Slot -->
+                <div class="ui-row"><span class="label">Weapon</span>
+                    <div class="weapon-info"><span id="weapon-name">UZI</span>
+                        <div class="cd-container">
+                            <div id="cd-fill"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Shrine Slot -->
+                <div class="ui-row"><span class="label">Shrine (G)</span>
+                    <div class="weapon-info">
+                        <div class="cd-container">
+                            <div id="shrine-cd-fill"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ui-divider" style="border-top: 1px solid rgba(255, 255, 255, 0.15); margin: 4px 0;"></div>
+
+                <!-- Wave & Enemies Counter -->
+                <div class="ui-row"><span class="label">Wave</span><span id="wave-val"
+                        style="color: #ff0055; font-family: monospace; font-size: 13px; font-weight: bold;">Wave
+                        1</span></div>
+                <div class="ui-row"><span class="label">Enemies</span><span id="enemy-count-val"
+                        style="color: #00f3ff; font-family: monospace; font-size: 13px; font-weight: bold;">6</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Over Overlay -->
+        <div id="gameover-overlay">
+            <div class="go-title">SYSTEM FAILURE</div>
+            <div class="go-subtitle">Combat Frame Neutralized</div>
+            <div class="go-stats">
+                <div class="go-stat-card">
+                    <div class="go-stat-val" id="go-wave-val">1</div>
+                    <div class="go-stat-lbl">Wave Reached</div>
+                </div>
+                <div class="go-stat-card">
+                    <div class="go-stat-val" id="go-kills-val">0</div>
+                    <div class="go-stat-lbl">Hostiles Purged</div>
+                </div>
+                <div class="go-stat-card">
+                    <div class="go-stat-val" id="go-rank-val" style="color: #ff0055;">D</div>
+                    <div class="go-stat-lbl">Max Style</div>
+                </div>
+                <div class="go-stat-card">
+                    <div class="go-stat-val" id="go-score-val">0</div>
+                    <div class="go-stat-lbl">Total Score</div>
+                </div>
+            </div>
+            <button class="reboot-btn" id="reboot-btn">REBOOT SYSTEM [R]</button>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+
+</html>
