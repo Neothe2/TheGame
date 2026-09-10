@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "The Game",
+  "version": "1.0.0",
+  "description": "Fast-paced neon cyberpunk platformer directly in your browser toolbar popup.",
+  "offline_enabled": true,
+  "action": {
+    "default_popup": "the_game.html",
+    "default_title": "Play The Game",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
