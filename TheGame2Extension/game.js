@@ -133,9 +133,51 @@
                 this._tone(280, "sine", 0.12, 0.15, 0.001, 140);
                 this._noise(0.1, 0.1, 1800);
             }
-            playExplosion() {
-                this._tone(75, "sawtooth", 0.4, 0.4, 0.001, 45);
-                this._noise(0.45, 0.45, 800);
+            playExplosion(intensity = 1.0) {
+                if (!this.enabled || !this.ctx) return;
+                if (this.ctx.state === "suspended") this.ctx.resume();
+                try {
+                    const t = this.ctx.currentTime;
+                    // 1. Transient initial crack / blast snap
+                    this._noise(0.06, 0.42 * intensity, 3600);
+
+                    // 2. Heavy punchy Sub-Bass drop (160Hz -> 28Hz)
+                    const subOsc = this.ctx.createOscillator();
+                    const subGain = this.ctx.createGain();
+                    subOsc.type = "sine";
+                    subOsc.frequency.setValueAtTime(160, t);
+                    subOsc.frequency.exponentialRampToValueAtTime(28, t + 0.38);
+                    subGain.gain.setValueAtTime(0.55 * intensity, t);
+                    subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+                    subOsc.connect(subGain);
+                    subGain.connect(this.ctx.destination);
+                    subOsc.start(t);
+                    subOsc.stop(t + 0.45);
+
+                    // 3. Distortion / grit roar
+                    this._tone(92, "sawtooth", 0.32, 0.35 * intensity, 0.001, 62);
+
+                    // 4. Low-end resonant debris rumble
+                    const bufferSize = Math.floor(this.ctx.sampleRate * 0.65);
+                    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                    const data = buffer.getChannelData(0);
+                    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+                    const noise = this.ctx.createBufferSource();
+                    noise.buffer = buffer;
+                    const filter = this.ctx.createBiquadFilter();
+                    filter.type = "lowpass";
+                    filter.frequency.setValueAtTime(950, t);
+                    filter.frequency.exponentialRampToValueAtTime(45, t + 0.65);
+                    filter.Q.setValueAtTime(3.2, t);
+                    const gain = this.ctx.createGain();
+                    gain.gain.setValueAtTime(0.48 * intensity, t);
+                    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.65);
+                    noise.connect(filter);
+                    filter.connect(gain);
+                    gain.connect(this.ctx.destination);
+                    noise.start(t);
+                    noise.stop(t + 0.65);
+                } catch (e) { }
             }
             playLaser() {
                 this._tone(880, "sawtooth", 0.1, 0.12, 0.001, 600);
@@ -1699,6 +1741,14 @@
                 if (!this.isFlying) {
                     context.physics.applyGravity(this);
                     context.physics.resolveCollisions(this);
+                } else {
+                    this.x += this.dx;
+                    this.y += this.dy;
+                    const pad = 15;
+                    if (this.x < pad) { this.x = pad; this.dx = Math.max(0, this.dx); }
+                    if (this.x > Config.WORLD.WIDTH - this.width - pad) { this.x = Config.WORLD.WIDTH - this.width - pad; this.dx = Math.min(0, this.dx); }
+                    if (this.y < pad) { this.y = pad; this.dy = Math.max(0, this.dy); }
+                    if (this.y > Config.WORLD.HEIGHT - this.height - pad) { this.y = Config.WORLD.HEIGHT - this.height - pad; this.dy = Math.min(0, this.dy); }
                 }
             }
 
@@ -1836,34 +1886,72 @@
                 super(x, y, 22, 22, Config.COLORS.DRONE, 65, "drone");
                 this.isFlying = true;
                 this.hoverAngle = Math.random() * Math.PI * 2;
-                this.targetAltitude = -120; // 120px above player
                 this.speedMult = 0.8;
                 this.ringAngle = 0;
+                this.slowSpeed = 2.0;
+                this.safeDistance = 220;
             }
 
             _think(context) {
                 const player = context.game.player;
                 if (player.isDead) return;
-                this.hoverAngle += 0.04;
+                this.hoverAngle += 0.025;
                 this.ringAngle += 0.08;
 
-                // Smooth floating trajectory hovering around player
-                const targetX = player.x + Math.sin(this.hoverAngle) * 140;
-                const targetY = player.y + this.targetAltitude + Math.cos(this.hoverAngle * 1.5) * 25;
+                const cx = this.x + this.width / 2;
+                const cy = this.y + this.height / 2;
+                const px = player.x + player.width / 2;
+                const py = player.y + player.height / 2;
+                const dist = Utils.dist(cx, cy, px, py);
 
-                const dx = targetX - this.x;
-                const dy = targetY - this.y;
-                this.dx += dx * 0.03;
-                this.dy += dy * 0.03;
-                this.dx *= 0.92;
-                this.dy *= 0.92;
+                let targetVx = 0;
+                let targetVy = 0;
+
+                // Move towards player slowly till safe distance, then maintain distance at that same speed
+                if (dist > this.safeDistance + 40) {
+                    // Beyond safe distance: move slowly towards player (aiming slightly above player)
+                    const ang = Math.atan2((player.y - 70) - cy, px - cx);
+                    targetVx = Math.cos(ang) * this.slowSpeed;
+                    targetVy = Math.sin(ang) * this.slowSpeed;
+                } else if (dist < this.safeDistance - 40) {
+                    // Too close: back away slowly to maintain safe distance
+                    const ang = Math.atan2(cy - py, cx - px);
+                    targetVx = Math.cos(ang) * this.slowSpeed;
+                    targetVy = Math.sin(ang) * this.slowSpeed;
+                } else {
+                    // In safe distance zone: maintain distance by smoothly orbiting/hovering around player at same slow speed
+                    const targetX = px + Math.cos(this.hoverAngle) * this.safeDistance;
+                    const targetY = (player.y - 80) + Math.sin(this.hoverAngle * 1.5) * 45;
+                    const ang = Math.atan2(targetY - cy, targetX - cx);
+                    targetVx = Math.cos(ang) * this.slowSpeed;
+                    targetVy = Math.sin(ang) * this.slowSpeed;
+                }
+
+                this.dx = Utils.lerp(this.dx, targetVx, 0.06);
+                this.dy = Utils.lerp(this.dy, targetVy, 0.06);
+
+                // Soft obstacle avoidance to prevent getting stuck in walls
+                if (context.level && context.level.platforms) {
+                    for (const plat of context.level.platforms) {
+                        if (Utils.checkAABB({ x: this.x - 12, y: this.y - 12, width: this.width + 24, height: this.height + 24 }, plat)) {
+                            const pcx = plat.x + plat.width / 2;
+                            const pcy = plat.y + plat.height / 2;
+                            const away = Math.atan2(cy - pcy, cx - pcx);
+                            this.dx += Math.cos(away) * 0.4;
+                            this.dy += Math.sin(away) * 0.4;
+                        }
+                    }
+                }
+
+                // Clamp to slow speed limit
+                const speed = Math.hypot(this.dx, this.dy);
+                if (speed > this.slowSpeed) {
+                    this.dx = (this.dx / speed) * this.slowSpeed;
+                    this.dy = (this.dy / speed) * this.slowSpeed;
+                }
 
                 // Fire twin plasma darts
                 if (this.shootTimer <= 0) {
-                    const cx = this.x + this.width / 2;
-                    const cy = this.y + this.height / 2;
-                    const px = player.x + player.width / 2;
-                    const py = player.y + player.height / 2;
                     const baseAngle = Utils.getAngle(cx, cy, px, py);
 
                     // Left and right plasma bolts
@@ -1936,6 +2024,10 @@
                 super(x, y, 36, 36, Config.COLORS.JUGGERNAUT, 240, "juggernaut");
                 this.speedMult = 0.42; // Slow unstoppable heavy
                 this.stompCooldown = 0;
+                this.facing = "left";
+                this.targetFacing = "left";
+                this.turnTimer = 0;
+                this.turnDelay = 30; // Slower turn duration (~0.5s turn inertia)
             }
 
             takeDamage(amount) {
@@ -1962,8 +2054,22 @@
                 const px = player.x + player.width / 2;
                 const dist = Utils.dist(cx, this.y, px, player.y);
 
-                this.facing = px < cx ? "left" : "right";
-                this.moveDir = px < cx ? -1 : 1;
+                const desiredFacing = px < cx ? "left" : "right";
+                if (desiredFacing !== this.facing) {
+                    if (this.turnTimer <= 0) {
+                        this.turnTimer = this.turnDelay;
+                        this.targetFacing = desiredFacing;
+                    }
+                    this.turnTimer--;
+                    // Turn inertia: decelerate / push slightly in old facing direction until turn completes
+                    this.moveDir = this.facing === "right" ? 0.2 : -0.2;
+                    if (this.turnTimer <= 0) {
+                        this.facing = this.targetFacing;
+                    }
+                } else {
+                    this.turnTimer = 0;
+                    this.moveDir = this.facing === "left" ? -1 : 1;
+                }
                 this._handleObstacles(context, player);
 
                 if (this.stompCooldown > 0) this.stompCooldown--;
@@ -2011,6 +2117,11 @@
                 ctx.save();
                 ctx.translate(cx, cy);
 
+                // Heavy turning tilt
+                if (this.turnTimer > 0 && !hitstopActive) {
+                    ctx.rotate((this.targetFacing === "right" ? 1 : -1) * 0.08);
+                }
+
                 // Heavy armor body
                 ctx.fillStyle = hitstopActive ? "#000000" : (this.hitFlashTimer > 0 ? "#ffffff" : "#1a1510");
                 ctx.fillRect(-18, -18, 36, 36);
@@ -2048,7 +2159,10 @@
         class PhantomEnemy extends BaseEnemy {
             constructor(x, y) {
                 super(x, y, 20, 20, Config.COLORS.PHANTOM, 80, "phantom");
-                this.teleportCooldown = 240 + Math.random() * 60;
+                this.teleportCooldown = 650 + Math.random() * 200; // Much lower frequency (~11-14s)
+                this.damageWarpCooldown = 0;
+                this.speedMult = 0.42; // Moves slowly towards player
+                this.safeDistance = 320; // Safe sniper engagement distance
                 this.sniperAimTimer = 0;
                 this.sniperAimMax = 65; // ~1 second telegraph aim
                 this.targetLockAngle = 0;
@@ -2056,27 +2170,45 @@
 
             takeDamage(amount) {
                 super.takeDamage(amount);
-                // Immediately warp away when hit!
-                if (!this.isDead && Math.random() < 0.8) {
+                // Reduced teleport frequency when damaged: internal cooldown & lower chance
+                if (!this.isDead && this.damageWarpCooldown <= 0 && (this.health < this.maxHealth * 0.4 || Math.random() < 0.2)) {
+                    this.damageWarpCooldown = 300;
                     this._teleport(window.gameInstance ? window.gameInstance.context : null);
                 }
             }
 
             _teleport(context) {
                 if (!context) return;
-                const validPerches = [
-                    { x: 150, y: 700 }, { x: 500, y: 700 }, { x: 900, y: 600 },
-                    { x: 250, y: 500 }, { x: 1050, y: 300 }, { x: 1550, y: 200 },
-                    { x: 750, y: 300 }, { x: 1800, y: 700 }, { x: 400, y: 900 }
+                const player = context.game.player;
+                const px = player ? (player.x + player.width / 2) : 1000;
+                const py = player ? (player.y + player.height / 2) : 600;
+
+                // Candidate perches across central fighting zones (avoiding far corner boundaries)
+                const candidatePerches = [
+                    { x: 300, y: 730 }, { x: 500, y: 730 }, { x: 850, y: 630 },
+                    { x: 1000, y: 630 }, { x: 450, y: 930 }, { x: 750, y: 830 },
+                    { x: 1050, y: 930 }, { x: 680, y: 330 }, { x: 1100, y: 330 },
+                    { x: 750, y: 480 }, { x: 1200, y: 480 }, { x: 1450, y: 230 }
                 ];
-                const perch = validPerches[Math.floor(Math.random() * validPerches.length)];
+
+                // Score perches to bring phantom closer to player (targeting ideal safe distance ~360px, NOT far corners!)
+                const scored = candidatePerches.map(p => {
+                    const d = Utils.dist(p.x, p.y, px, py);
+                    return { perch: p, score: Math.abs(d - 360) };
+                });
+                scored.sort((a, b) => a.score - b.score);
+
+                // Choose randomly among the top 3 best-positioned perches near player
+                const topPicks = scored.slice(0, Math.min(3, scored.length));
+                const chosen = topPicks[Math.floor(Math.random() * topPicks.length)].perch;
+
                 context.particles.emitExplosion(this.x + this.width / 2, this.y + this.height / 2, "#bd00ff", 14);
                 context.particles.emitSlash(this.x + this.width / 2, this.y + this.height / 2, "#ff00ea", 40);
-                this.x = perch.x + Utils.rand(-20, 20);
-                this.y = perch.y - 30;
+                this.x = chosen.x + Utils.rand(-15, 15);
+                this.y = chosen.y - this.height;
                 this.dx = 0; this.dy = 0;
                 context.particles.emitExplosion(this.x + this.width / 2, this.y + this.height / 2, "#bd00ff", 14);
-                this.teleportCooldown = 240 + Math.random() * 80;
+                this.teleportCooldown = 650 + Math.random() * 200;
                 this.sniperAimTimer = this.sniperAimMax;
                 if (context.game.sound) context.game.sound.playLaser();
             }
@@ -2088,10 +2220,28 @@
                 const cy = this.y + this.height / 2;
                 const px = player.x + player.width / 2;
                 const py = player.y + player.height / 2;
+                const dist = Utils.dist(cx, this.y, px, player.y);
 
+                if (this.damageWarpCooldown > 0) this.damageWarpCooldown--;
+
+                // Natural teleport timer
                 if (this.teleportCooldown > 0) {
                     this.teleportCooldown--;
                     if (this.teleportCooldown <= 0) this._teleport(context);
+                }
+
+                // Movement AI: Move slowly towards player till reaching safe distance, then maintain that distance
+                if (dist > this.safeDistance + 50) {
+                    // Beyond safe distance: advance towards player slowly
+                    this.moveDir = px < cx ? -1 : 1;
+                    this._handleObstacles(context, player);
+                } else if (dist < this.safeDistance - 60) {
+                    // Too close: back away slowly to maintain safe sniper distance
+                    this.moveDir = px < cx ? 0.7 : -0.7;
+                    this._handleObstacles(context, player);
+                } else {
+                    // In safe engagement distance: hold position
+                    this.moveDir = 0;
                 }
 
                 // Aim and telegraph sniper beam
@@ -2185,8 +2335,8 @@
                     this.moveDir = px < cx ? -1 : 1;
                     this._handleObstacles(context, player);
 
-                    // If within 65px, start countdown!
-                    if (dist < 65) {
+                    // If within 85px, start countdown!
+                    if (dist < 85) {
                         this.isCountingDown = true;
                         this.countdownTimer = this.countdownMax;
                         this.dx = 0;
@@ -2194,7 +2344,7 @@
                 } else {
                     this.dx *= 0.5; // Freeze in place during final beep countdown
                     this.countdownTimer--;
-                    if (this.countdownTimer % 10 === 0 && context.game.sound) {
+                    if (this.countdownTimer % 8 === 0 && context.game.sound) {
                         context.game.sound.playBeep();
                     }
                     if (this.countdownTimer <= 0) {
@@ -2209,13 +2359,13 @@
                 this.markedForDeletion = true;
                 const cx = this.x + this.width / 2;
                 const cy = this.y + this.height / 2;
-                const blastRadius = 95;
+                const blastRadius = 165;
 
-                context.camera.shake(14);
-                context.particles.emitExplosion(cx, cy, "#ffaa00", 25);
-                context.particles.emitExplosion(cx, cy, "#ff003c", 20);
+                context.camera.shake(18);
+                context.particles.emitExplosion(cx, cy, "#ffaa00", 35);
+                context.particles.emitExplosion(cx, cy, "#ff003c", 30);
                 context.particles.emitShockwave(cx, cy, blastRadius, "#ff5500");
-                if (context.game.sound) context.game.sound.playExplosion();
+                if (context.game.sound) context.game.sound.playExplosion(1.4);
 
                 // Damage Player
                 const player = context.game.player;
@@ -2223,8 +2373,8 @@
                 if (pDist < blastRadius) {
                     player.takeDamage(35);
                     const ang = Math.atan2((player.y + player.height / 2) - cy, (player.x + player.width / 2) - cx);
-                    player.dx += Math.cos(ang) * 16;
-                    player.dy += Math.sin(ang) * 16;
+                    player.dx += Math.cos(ang) * 18;
+                    player.dy += Math.sin(ang) * 18;
                 }
 
                 // Chain reaction: damage all nearby enemies!
@@ -2232,7 +2382,7 @@
                     if (other === this || other.isDead) return;
                     const oDist = Utils.dist(cx, cy, other.x + other.width / 2, other.y + other.height / 2);
                     if (oDist < blastRadius) {
-                        other.takeDamage(110);
+                        other.takeDamage(120);
                         context.game.styleSystem.addPoints(200, "CHAIN DETONATION!");
                     }
                 });
@@ -2250,15 +2400,25 @@
                 const cx = this.x + this.width / 2;
                 const cy = this.y + this.height / 2;
 
-                // Pulsing red countdown blast radius
+                // Pulsing red countdown blast radius with full danger boundary
                 if (this.isCountingDown && !hitstopActive) {
                     const pct = 1 - (this.countdownTimer / this.countdownMax);
+                    const radius = 165;
                     ctx.save();
-                    ctx.strokeStyle = "rgba(255, 0, 85, 0.7)";
-                    ctx.lineWidth = 2;
-                    ctx.setLineDash([4, 6]);
+                    // Outer danger boundary circle
+                    ctx.strokeStyle = "rgba(255, 80, 0, 0.35)";
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([6, 6]);
                     ctx.beginPath();
-                    ctx.arc(cx, cy, 95 * pct, 0, Math.PI * 2);
+                    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    // Expanding charge wave
+                    ctx.strokeStyle = "rgba(255, 0, 85, 0.85)";
+                    ctx.lineWidth = 2.5;
+                    ctx.setLineDash([4, 4]);
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, radius * pct, 0, Math.PI * 2);
                     ctx.stroke();
                     ctx.restore();
                 }
